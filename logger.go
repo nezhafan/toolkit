@@ -1,4 +1,4 @@
-package candy
+package toolkit
 
 import (
 	"encoding/json"
@@ -26,7 +26,6 @@ type Logger struct {
 	level level
 }
 
-// candy.NewLogger("test.log", candy.LevelDebug)
 func NewLogger(filename string, level level) *Logger {
 	l := &Logger{
 		w:     os.Stdout,
@@ -35,7 +34,7 @@ func NewLogger(filename string, level level) *Logger {
 
 	if filename != "" {
 		var err error
-		l.w, err = OpenFile(filename)
+		l.w, err = FileOpen(filename)
 		if err != nil {
 			panic("open log file error: " + err.Error())
 		}
@@ -45,7 +44,7 @@ func NewLogger(filename string, level level) *Logger {
 }
 
 func (l *Logger) Debug(args ...any) {
-	if len(args) > 0 {
+	if l.level >= LevelDebug && len(args) > 0 {
 		write(l, LevelDebug, args...)
 	}
 }

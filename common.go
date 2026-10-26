@@ -1,73 +1,70 @@
-package candy
+package toolkit
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
-	"reflect"
 	"runtime"
 	"strings"
-	"unicode/utf8"
+	"unicode"
 )
 
-// 字符串长度
-func StrLen(s string) int {
-	return utf8.RuneCountInString(s)
+// 打印JSON
+func JSON(v any) string {
+	bs, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(bs)
 }
 
-// 除法。保留x位小数
-func Div[T Number](a, b T, decimals uint8) float64 {
-	if b == 0 {
+// 是否为ASCII
+func IsASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] > unicode.MaxASCII {
+			return false
+		}
+	}
+	return true
+}
+
+// 是否有效数字（float64存在NaN和Inf的可能）
+func IsNumber(f float64) bool {
+	return !math.IsNaN(f) && !math.IsInf(f, 0)
+}
+
+// 除法，截断保留x位小数 (非四舍五入)
+func DivTrunc[E Number](a, b E, precision uint8) float64 {
+	if a == 0 || b == 0 {
 		return 0
 	}
-	return Round(float64(a)/float64(b), decimals)
+	return Trunc(float64(a)/float64(b), precision)
 }
 
-// 保留x位小数
-func Round(n float64, decimals uint8) float64 {
-	ratio := math.Pow(10, float64(decimals))
-	return math.Round(n*ratio) / ratio
+// 截断保留x位小数 (非四舍五入)
+func Trunc(n float64, precision uint8) float64 {
+	pow := math.Pow(10, float64(precision))
+	if n = math.Trunc(n * pow); !IsNumber(n) {
+		return 0
+	}
+	return n / pow
 }
 
-// 结构体、结构体指针、结构体切片
-func GetTags(v any, tag string) []string {
-	var tp reflect.Type
-	if x, ok := v.(reflect.Type); ok {
-		tp = x
-	} else {
-		tp = reflect.TypeOf(v)
-	}
+// 加密
+func Sha256(s string) string {
+	h := sha256.New()
+	h.Write([]byte(s))
+	return hex.EncodeToString(h.Sum(nil))
+}
 
-	if tp.Kind() == reflect.Ptr {
-		tp = tp.Elem()
-	}
-
-	if tp.Kind() == reflect.Slice {
-		tp = tp.Elem()
-	}
-
-	n := tp.NumField()
-	result := make([]string, 0, n)
-	for i := 0; i < n; i++ {
-		field := tp.Field(i)
-		s := field.Tag.Get(tag)
-		if s == "-" {
-			continue
-		}
-		// json:"xxx,omitempty"
-		if s != "" {
-			if idx := strings.IndexByte(s, ','); idx > -1 {
-				s = s[0:idx]
-			}
-		}
-		// 如果有标签则记录，如果没标签，判断是否为嵌套的结构体
-		if s != "" {
-			result = append(result, s)
-		} else if field.Type.Kind() == reflect.Struct {
-			result = append(result, GetTags(field.Type, tag)...)
-		}
-	}
-
-	return result
+// 加密
+func HmacSha256(s string, key []byte) string {
+	h := hmac.New(sha256.New, key)
+	h.Write([]byte(s))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // 追踪调用位置

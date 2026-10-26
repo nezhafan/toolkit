@@ -1,4 +1,4 @@
-package candy
+package toolkit
 
 import (
 	"bytes"
@@ -7,101 +7,85 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/valyala/bytebufferpool"
 )
 
+var (
+	// 默认client，10秒超时
+	defaultHttpClient = &http.Client{Timeout: time.Second * 10}
+	// 日志输出
+	httpLogger io.Writer = os.Stdout
+)
+
+const (
+	postJsonContentType = "application/json"
+	postFormContentType = "application/x-www-form-urlencoded"
+)
+
+// 日志输出。 传入nil则关闭
+func HttpSetLogger(l io.Writer) {
+	httpLogger = l
+}
+
+// 结构体支持
 type Request struct {
-	timeout uint8             // 请求超时（秒）
-	Url     string            `json:"url"`
-	Method  string            `json:"method"`
-	Body    json.RawMessage   `json:"body,omitempty"`
-	Header  map[string]string `json:"header,omitempty"`
+	url     string
+	method  string
+	body    []byte
+	header  map[string]string
+	timeout time.Duration
 }
 
 func HttpGet(url string, params map[string]string) *Request {
-	r := Request{
-		Method: http.MethodGet,
-		Url:    url,
+	r := &Request{
+		url:    url,
+		method: http.MethodGet,
 	}
 
 	if len(params) > 0 {
 		buf := bytebufferpool.Get()
 		defer bytebufferpool.Put(buf)
+
+		buf.WriteString(r.url + "?")
 		for k, v := range params {
 			buf.WriteString(k + "=" + v + "&")
 		}
-		s := buf.String()[:buf.Len()-1]
 
-		r.Url += "?" + s
+		r.url = buf.String()[:buf.Len()-1]
 	}
 
-	return &r
+	return r
 }
 
 func HttpPostJson(url string, data any) *Request {
-	r := Request{
-		Method: http.MethodPost,
-		Url:    url,
-		Header: map[string]string{"Content-Type": "application/json"},
-	}
-	if data != nil {
-		bs, _ := json.Marshal(data)
-		r.Body = json.RawMessage(bs)
+	r := &Request{
+		url:    url,
+		method: http.MethodPost,
+		header: map[string]string{"Content-Type": postJsonContentType},
 	}
 
-	return &r
+	if data != nil {
+		bs, _ := json.Marshal(data)
+		r.body = bs
+	}
+
+	return r
 }
 
 func HttpPostForm(url string, data map[string]any) *Request {
-	r := Request{
-		Method: http.MethodPost,
-		Url:    url,
-		Header: map[string]string{"Content-Type": "application/x-www-form-urlencoded"},
-		Body:   buildForm(data),
-	}
-	return &r
-}
-
-func HttpPutJson(url string, data any) *Request {
-	r := Request{
-		Method: http.MethodPut,
-		Url:    url,
-		Header: map[string]string{"Content-Type": "application/json"},
-	}
-	if data != nil {
-		bs, _ := json.Marshal(data)
-		r.Body = json.RawMessage(bs)
+	r := &Request{
+		url:    url,
+		method: http.MethodPost,
+		header: map[string]string{"Content-Type": postFormContentType},
 	}
 
-	return &r
-}
+	r.body = buildForm(data)
 
-func HttpPutForm(url string, data map[string]any) *Request {
-	r := Request{
-		Method: http.MethodPut,
-		Url:    url,
-		Header: map[string]string{"Content-Type": "application/x-www-form-urlencoded"},
-		Body:   buildForm(data),
-	}
-	return &r
-}
-
-func HttpDelete(url string) *Request {
-	r := Request{
-		Method: http.MethodDelete,
-		Url:    url,
-	}
-	return &r
-}
-
-func HttpHead(url string) *Request {
-	r := Request{
-		Method: http.MethodHead,
-		Url:    url,
-	}
-	return &r
+	return r
 }
 
 func buildForm(data map[string]any) []byte {
@@ -117,54 +101,102 @@ func buildForm(data map[string]any) []byte {
 }
 
 func (r *Request) SetHeader(key, value string) *Request {
-	if r.Header == nil {
-		r.Header = make(map[string]string)
+	if r.header == nil {
+		r.header = make(map[string]string)
 	}
-	r.Header[key] = value
+	r.header[key] = value
 	return r
 }
 
-func (r *Request) SetTimeout(second uint8) *Request {
-	r.timeout = second
+func (r *Request) SetTimeout(t time.Duration) *Request {
+	r.timeout = t
 	return r
 }
 
-func (r *Request) Do() (*http.Response, error) {
-	req, err := http.NewRequest(r.Method, r.Url, bytes.NewReader(r.Body))
+func (r *Request) Do(data any) (err error) {
+	start := time.Now()
+
+	req, err := http.NewRequest(r.method, r.url, bytes.NewReader(r.body))
 	if err != nil {
-		return nil, err
+		r.log(start, nil, err)
+		return
 	}
 
-	for k, v := range r.Header {
+	for k, v := range r.header {
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{Timeout: time.Duration(r.timeout) * time.Second}
-	if r.timeout == 0 {
-		client.Timeout = time.Second * 10
-	} else {
-		client.Timeout = time.Duration(r.timeout) * time.Second
+	client := defaultHttpClient
+	if r.timeout > 0 && client.Timeout != r.timeout {
+		client = &http.Client{Timeout: r.timeout}
 	}
 
 	resp, err := client.Do(req)
-
-	// 判断状态码
-	if resp.StatusCode > http.StatusCreated && err == nil {
-		err = errors.New("HTTP返回状态码异常: " + resp.Status)
-	}
-
-	return resp, err
-}
-
-func (r *Request) DoAndParse(data any) error {
-	resp, err := r.Do()
 	if err != nil {
-		return err
+		r.log(start, nil, err)
+		return
 	}
 	defer resp.Body.Close()
+
+	// 判断状态码
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		err = errors.New("HTTP返回状态码异常: " + resp.Status)
+		return
+	}
+
+	// 解析body
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		r.log(start, nil, err)
+		return
 	}
-	return json.Unmarshal(b, data)
+	err = json.Unmarshal(b, data)
+	r.log(start, b, err)
+	return
+}
+
+type requestLog struct {
+	Level    string          `json:"level"`
+	Time     string          `json:"time"`
+	Api      string          `json:"api"`
+	Method   string          `json:"method"`
+	Cost     string          `json:"cost"`
+	Err      string          `json:"error,omitempty"`
+	Body     any             `json:"body,omitempty"`
+	Response json.RawMessage `json:"response,omitempty"`
+}
+
+const datetime = "2006-01-02 15:04:05"
+
+func (r *Request) log(start time.Time, resp []byte, err error) {
+	if httpLogger == nil {
+		return
+	}
+
+	data := requestLog{
+		Time:     start.Format(datetime),
+		Api:      r.url,
+		Method:   r.method,
+		Cost:     strconv.Itoa(int(time.Since(start).Milliseconds())) + "ms",
+		Response: resp,
+	}
+	if len(r.body) > 0 {
+		if r.header["Content-Type"] == postJsonContentType {
+			data.Body = r.body
+		} else {
+			data.Body = string(r.body)
+		}
+	}
+	if err != nil {
+		data.Err = err.Error()
+	}
+
+	buf := bytebufferpool.Get()
+	defer bytebufferpool.Put(buf)
+	enc := json.NewEncoder(buf)
+	enc.SetEscapeHTML(false)
+	enc.Encode(data)
+	buf.WriteByte('\n')
+
+	httpLogger.Write(buf.Bytes())
 }

@@ -1,4 +1,4 @@
-package candy
+package toolkit
 
 type Signed interface {
 	~int | ~int8 | ~int16 | ~int32 | ~int64
@@ -20,6 +20,7 @@ type Number interface {
 	Integer | Float
 }
 
+// 等同 cmp.Ordered“
 type Ordered interface {
 	Integer | Float | ~string
 }

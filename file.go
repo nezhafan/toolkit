@@ -1,22 +1,28 @@
-package candy
+package toolkit
 
 import (
 	"bufio"
-	"io"
 	"os"
 	"path/filepath"
 )
 
-// 判断文件是否存在
-func ExistsFile(filename string) bool {
+const (
+	defaultMaxLineSize = 16 << 20
+)
+
+// 文件是否存在（不含权限）
+func FileExist(filename string) bool {
 	_, err := os.Stat(filename)
+	if err == nil {
+		return true
+	}
 	return !os.IsNotExist(err)
 }
 
-// 打开文件 (文件不存在则创建)
-func OpenFile(filename string) (*os.File, error) {
+// 打开文件 (文件或文件夹不存在则创建)
+func FileOpen(filename string) (*os.File, error) {
 	dir := filepath.Dir(filename)
-	if !ExistsFile(dir) {
+	if !FileExist(dir) {
 		err := os.MkdirAll(dir, os.ModePerm)
 		if err != nil {
 			return nil, err
@@ -27,24 +33,21 @@ func OpenFile(filename string) (*os.File, error) {
 }
 
 // 按行读取文件
-func ReadFileByLine(filename string, fn func(string) error) error {
-	osfile, err := os.Open(filename)
+func FileReadByLine(filename string, fn func(string) error) error {
+	file, err := os.Open(filename)
 	if err != nil {
 		return err
 	}
-	defer osfile.Close()
+	defer file.Close()
 
-	r := bufio.NewReader(osfile)
-	for {
-		s, err := r.ReadString('\n')
-		if err == nil {
-			err = fn(s)
-		}
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), defaultMaxLineSize)
+
+	for scanner.Scan() {
+		if err := fn(scanner.Text()); err != nil {
 			return err
 		}
 	}
+
+	return scanner.Err()
 }
